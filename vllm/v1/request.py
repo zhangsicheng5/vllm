@@ -83,6 +83,12 @@ class Request:
         # The number of tokens with prefix cache hits.
         self.num_cached_tokens = -1
 
+        # Context parallel & Sequence parallel
+        self.token_ids_of_cp_sp = None
+        self.num_blocks_of_cp_sp = None
+        self.num_computed_tokens_of_cp_sp = None
+        self.kv_rank = (0, 0)
+
     @classmethod
     def from_engine_core_request(cls, request: EngineCoreRequest) -> "Request":
         if request.mm_inputs is not None:

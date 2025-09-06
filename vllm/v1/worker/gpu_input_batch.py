@@ -39,6 +39,10 @@ class CachedRequestState:
 
     lora_request: Optional[LoRARequest] = None
 
+    # cp param
+    kv_rank: Optional[tuple[int]] = None
+    num_computed_tokens_of_cp_sp: Optional[list[list[int]]] = None
+
     def __post_init__(self):
         self.num_prompt_tokens = len(self.prompt_token_ids)
 
@@ -226,6 +230,10 @@ class InputBatch:
         # This is updated each time the batch constituents change.
         self.sampling_metadata = self._make_sampling_metadata()
 
+        # cp param
+        self.kv_rank: list[tuple[int]] = [None] * max_num_reqs
+        self.num_computed_tokens_of_cp_sp: list[list[list[int]]] = [None] * max_num_reqs
+
     @property
     def req_ids(self) -> list[str]:
         # None elements should only be present transiently
@@ -250,6 +258,10 @@ class InputBatch:
             self.req_output_token_ids[req_index] = request.output_token_ids
 
         self.req_id_to_index[req_id] = req_index
+
+        # cp param
+        self.kv_rank[req_index] = request.kv_rank
+        self.num_computed_tokens_of_cp_sp[req_index] = request.num_computed_tokens_of_cp_sp
 
         # Copy the prompt token ids and output token ids.
         num_prompt_tokens = len(request.prompt_token_ids)

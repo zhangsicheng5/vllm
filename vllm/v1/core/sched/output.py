@@ -30,6 +30,7 @@ class NewRequestData:
     block_ids: tuple[list[int], ...]
     num_computed_tokens: int
     lora_request: Optional[LoRARequest]
+    num_computed_tokens_of_cp_sp: Optional[list[list[int]]]
 
     @classmethod
     def from_request(
@@ -47,6 +48,7 @@ class NewRequestData:
             block_ids=block_ids,
             num_computed_tokens=request.num_computed_tokens,
             lora_request=request.lora_request,
+            num_computed_tokens_of_cp_sp=request.num_computed_tokens_of_cp_sp,
         )
 
     def __repr__(self):
@@ -88,6 +90,8 @@ class CachedRequestData:
     new_token_ids: list[int]
     new_block_ids: tuple[list[int], ...]
     num_computed_tokens: int
+    kv_rank: tuple[int]
+    num_computed_tokens_of_cp_sp: list[list[int]]  # shape = (cp_size, sp_size)
 
     @classmethod
     def from_request(
@@ -96,6 +100,8 @@ class CachedRequestData:
         resumed_from_preemption: bool,
         new_token_ids: list[int],
         new_block_ids: tuple[list[int], ...],
+        kv_rank: tuple[int],
+        num_computed_tokens_of_cp_sp: list[list[int]]
     ) -> CachedRequestData:
         return cls(
             req_id=request.request_id,
@@ -103,6 +109,8 @@ class CachedRequestData:
             new_token_ids=new_token_ids,
             new_block_ids=new_block_ids,
             num_computed_tokens=request.num_computed_tokens,
+            kv_rank=kv_rank,
+            num_computed_tokens_of_cp_sp=num_computed_tokens_of_cp_sp,
         )
 
 

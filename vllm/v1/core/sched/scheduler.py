@@ -611,7 +611,9 @@ class Scheduler(SchedulerInterface):
             req_data = CachedRequestData.from_request(request,
                                                       resumed_from_preemption,
                                                       new_token_ids,
-                                                      new_block_ids)
+                                                      new_block_ids,
+                                                      request.kv_rank,
+                                                      request.num_computed_tokens_of_cp_sp)
         return req_data
 
     def _try_schedule_encoder_inputs(

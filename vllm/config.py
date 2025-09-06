@@ -1740,6 +1740,8 @@ class ParallelConfig:
     """Number of pipeline parallel groups."""
     tensor_parallel_size: int = 1
     """Number of tensor parallel groups."""
+    context_parallel_size: int = 1
+    """Number of context parallel groups."""
     data_parallel_size: int = 1
     """Number of data parallel groups. MoE layers will be sharded according to
     the product of the tensor parallel size and data parallel size."""
@@ -1758,6 +1760,8 @@ class ParallelConfig:
     """Port of the data parallel master."""
     data_parallel_backend: str = "mp"
     """Backend to use for data parallel, either "mp" or "ray"."""
+    enable_sequence_parallel: bool = False
+    """Enable sequence parallel."""
     enable_expert_parallel: bool = False
     """Use expert parallelism instead of tensor parallelism for MoE layers."""
     max_parallel_loading_workers: Optional[int] = None
@@ -1875,7 +1879,7 @@ class ParallelConfig:
 
     def __post_init__(self) -> None:
         self.world_size = self.pipeline_parallel_size * \
-            self.tensor_parallel_size
+            self.tensor_parallel_size * self.context_parallel_size
 
         if self.data_parallel_size_local > self.data_parallel_size:
             raise ValueError(
@@ -2212,15 +2216,15 @@ class SchedulerConfig:
         self._verify_args()
 
     def _verify_args(self) -> None:
-        if (self.max_num_batched_tokens < self.max_model_len
-                and not self.chunked_prefill_enabled):
-            raise ValueError(
-                f"max_num_batched_tokens ({self.max_num_batched_tokens}) is "
-                f"smaller than max_model_len ({self.max_model_len}). "
-                "This effectively limits the maximum sequence length to "
-                "max_num_batched_tokens and makes vLLM reject longer "
-                "sequences. Please increase max_num_batched_tokens or "
-                "decrease max_model_len.")
+        # if (self.max_num_batched_tokens < self.max_model_len
+        #         and not self.chunked_prefill_enabled):
+        #     raise ValueError(
+        #         f"max_num_batched_tokens ({self.max_num_batched_tokens}) is "
+        #         f"smaller than max_model_len ({self.max_model_len}). "
+        #         "This effectively limits the maximum sequence length to "
+        #         "max_num_batched_tokens and makes vLLM reject longer "
+        #         "sequences. Please increase max_num_batched_tokens or "
+        #         "decrease max_model_len.")
 
         if self.max_num_batched_tokens < self.max_num_seqs:
             raise ValueError(
