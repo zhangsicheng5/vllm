@@ -216,7 +216,8 @@ class RMSNorm(CustomOp):
         )
 
     def extra_repr(self) -> str:
-        s = f"hidden_size={self.weight.data.size(0)}"
+        # s = f"hidden_size={self.weight.data.size(0)}"
+        s = f"hidden_size="
         s += f", eps={self.variance_epsilon}"
         return s
 
