@@ -29,6 +29,7 @@ class ParallelSetup(NamedTuple):
     tp_size: int
     pp_size: int
     dcp_size: int
+    cp_size: int
     eager_mode: bool
     chunked_prefill: bool
 
@@ -36,6 +37,7 @@ class ParallelSetup(NamedTuple):
 class CPTestOptions(NamedTuple):
     multi_node_only: bool
     load_format: Optional[str] = None
+    attn_backend: str = "FLASH_ATTN"
 
 
 @dataclass
@@ -64,29 +66,35 @@ class CPTestSettings:
         tp_base: int = 4,
         pp_base: int = 1,
         dcp_base: int = 1,
+        cp_base: int = 1,
         multi_node_only: bool = False,
         runner: RunnerOption = "auto",
         load_format: Optional[str] = None,
+        attn_backend: str = "FLASH_ATTN",
     ):
         parallel_setups = []
         for eager_mode_val in [False]:
             for pp_multiplier in [1]:
-                for dcp_multiplier in [0.5, 1]:
-                    for chunked_prefill_val in [True]:
-                        parallel_setups.append(
-                            ParallelSetup(tp_size=tp_base,
-                                          pp_size=pp_multiplier * pp_base,
-                                          dcp_size=int(dcp_multiplier *
-                                                       tp_base),
-                                          eager_mode=eager_mode_val,
-                                          chunked_prefill=chunked_prefill_val))
+                for cp_multiplier in [1, 2]:
+                    for dcp_multiplier in [0.5, 1]:
+                        for chunked_prefill_val in [True]:
+                            parallel_setups.append(
+                                ParallelSetup(tp_size=tp_base,
+                                              pp_size=pp_multiplier * pp_base,
+                                              dcp_size=int(dcp_multiplier *
+                                                           tp_base),
+                                              cp_size=cp_base * cp_multiplier,
+                                              eager_mode=eager_mode_val,
+                                              chunked_prefill=
+                                                  chunked_prefill_val))
         return CPTestSettings(
             parallel_setups=parallel_setups,
             distributed_backends=["mp"],
             vllm_major_versions=["1"],
             runner=runner,
             test_options=CPTestOptions(multi_node_only=multi_node_only,
-                                       load_format=load_format),
+                                       load_format=load_format,
+                                       attn_backend=attn_backend),
         )
 
     def iter_params(self, model_id: str):
@@ -115,11 +123,12 @@ def _compare_cp_with_tp(
         tp_size,
         pp_size,
         dcp_size,
+        cp_size,
         eager_mode,
         chunked_prefill,
     ) = parallel_setup
 
-    multi_node_only, load_format = test_options
+    multi_node_only, load_format, attn_backend = test_options
 
     model_info = HF_EXAMPLE_MODELS.find_hf_info(model_id)
     model_info.check_transformers_version(on_fail="skip")
@@ -160,7 +169,7 @@ def _compare_cp_with_tp(
         "--max-model-len",
         "2048",
         "--max-num-seqs",
-        "8",
+        "16",
     ]
     if chunked_prefill:
         common_args.append("--enable-chunked-prefill")
@@ -180,6 +189,8 @@ def _compare_cp_with_tp(
     cp_env = tp_env = {
         "VLLM_USE_V1":
         vllm_major_version,  # Note(hc): DCP only support V1 engine only
+        "VLLM_ATTENTION_BACKEND": 
+        attn_backend,
     }
 
     cp_args = [
@@ -190,6 +201,8 @@ def _compare_cp_with_tp(
         str(pp_size),
         "--decode-context-parallel-size",
         str(dcp_size),
+        "--context-parallel-size",
+        str(cp_size),
         "--distributed-executor-backend",
         distributed_backend,
     ]
@@ -227,12 +240,17 @@ CP_TEXT_GENERATION_MODELS = {
     "deepseek-ai/DeepSeek-V2-Lite-Chat":
     [CPTestSettings.detailed(),
      CPTestSettings.detailed(tp_base=2)],
+    # [GQA attention for cp]
+    "bigcode/gpt_bigcode-santacoder":
+    [ CPTestSettings.detailed(attn_backend="FLASHINFER"),
+     CPTestSettings.detailed(tp_base=2, attn_backend="FLASHINFER")],
 }
 
 CP_TEST_MODELS = [
     # TODO support other models
     # [LANGUAGE GENERATION]
     "deepseek-ai/DeepSeek-V2-Lite-Chat",
+    "bigcode/gpt_bigcode-santacoder",
 ]
 
 
