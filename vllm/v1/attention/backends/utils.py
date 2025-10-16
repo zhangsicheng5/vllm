@@ -851,3 +851,36 @@ def create_fast_prefill_custom_backend(
         builder_cls=FastPrefillAttentionBuilder)
 
     return attn_backend
+
+
+def get_cp_local_seq_lens(
+    seq_lens: torch.Tensor,
+    cp_world_size: int = 1,
+    dcp_world_size: int = 1,
+    cp_kv_cache_interleave_size: int = 1,
+) -> torch.Tensor:
+    """While using cp or dcp, kv_cache size stored on each rank may be different,
+    use this function to calculate split decode seq_lens of each (d)cp rank.
+    """
+    num_requests = seq_lens.size(0)
+    total_world_size = cp_world_size * dcp_world_size
+    seq_lens_tiled = seq_lens.unsqueeze(-1).repeat(1, total_world_size)
+    rank_offsets = (
+        torch.arange(total_world_size, dtype=torch.int32)
+        .unsqueeze(0)
+        .repeat(num_requests, 1)
+    )
+    base = (
+        seq_lens_tiled
+        // cp_kv_cache_interleave_size
+        // total_world_size
+        * cp_kv_cache_interleave_size
+    )
+    remainder = seq_lens_tiled - base * total_world_size
+    remainder = torch.clip(
+        remainder - rank_offsets * cp_kv_cache_interleave_size,
+        0,
+        cp_kv_cache_interleave_size,
+    )
+    dcp_local_seq_lens = (base + remainder).reshape([-1, cp_world_size, dcp_world_size])
+    return dcp_local_seq_lens
