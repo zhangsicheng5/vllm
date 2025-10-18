@@ -658,7 +658,7 @@ class WorkerProc:
         """Main busy loop for Multiprocessing Workers"""
         while True:
             method, args, kwargs, output_rank = self.rpc_broadcast_mq.dequeue(
-                cancel=cancel)
+                cancel=cancel, indefinite=True)
             try:
                 if isinstance(method, str):
                     func = getattr(self.worker, method)
