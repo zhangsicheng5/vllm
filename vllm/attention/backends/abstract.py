@@ -124,8 +124,8 @@ class AttentionImpl(ABC, Generic[T]):
     dcp_world_size: int
     dcp_rank: int
 
-    cp_world_size: int
-    cp_rank: int
+    pcp_world_size: int
+    pcp_rank: int
 
     def __new__(cls, *args, **kwargs):
         # use __new__ so that all subclasses will call this
@@ -139,13 +139,14 @@ class AttentionImpl(ABC, Generic[T]):
             self.dcp_world_size = 1
             self.dcp_rank = 0
         try:
-            from vllm.distributed.parallel_state import get_cp_group
-            self.cp_world_size = get_cp_group().world_size
-            self.cp_rank = get_cp_group().rank_in_group
+            from vllm.distributed.parallel_state import get_pcp_group
+
+            self.pcp_world_size = get_pcp_group().world_size
+            self.pcp_rank = get_pcp_group().rank_in_group
         except AssertionError:
-            # CP might not be initialized in testing
-            self.cp_world_size = 1
-            self.cp_rank = 0
+            # PCP might not be initialized in testing
+            self.pcp_world_size = 1
+            self.pcp_rank = 0
 
         self.need_to_return_lse_for_decode = self.dcp_world_size > 1 \
             and self.can_return_lse_for_decode

@@ -85,7 +85,7 @@ class CommonAttentionMetadata:
 
     # Needed by custom mask calc for context parallelism
     query_positions: Optional[np.ndarray] = None
-    cp_allgather_restore_idx: Optional[torch.Tensor] = None
+    pcp_allgather_restore_idx: Optional[torch.Tensor] = None
 
 def slice_query_start_locs(
     query_start_loc: torch.Tensor,
@@ -180,11 +180,11 @@ def _make_metadata_with_slice(
     slot_mapping = attn_metadata.slot_mapping[token_slice]
 
     # TODO(qcs): check if we can split query_positions and
-    # cp_kv_recover_idx as following approach
+    # pcp_allgather_restore_idx as following approach
     query_positions = attn_metadata.query_positions[token_slice] \
         if attn_metadata.query_positions is not None else None
-    cp_allgather_restore_idx = attn_metadata.cp_allgather_restore_idx[
-        token_slice] if attn_metadata.cp_allgather_restore_idx is not None \
+    pcp_allgather_restore_idx = attn_metadata.pcp_allgather_restore_idx[
+        token_slice] if attn_metadata.pcp_allgather_restore_idx is not None \
                 else None
 
     return CommonAttentionMetadata(
@@ -200,7 +200,7 @@ def _make_metadata_with_slice(
         block_table_tensor=block_table_tensor,
         slot_mapping=slot_mapping,
         query_positions=query_positions,
-        cp_allgather_restore_idx=cp_allgather_restore_idx,
+        pcp_allgather_restore_idx=pcp_allgather_restore_idx,
     )
 
 
