@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Sequence
 
+from vllm.logger import logger
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.block_pool import BlockPool
 from vllm.v1.core.kv_cache_utils import (
@@ -21,6 +22,7 @@ from vllm.v1.kv_cache_interface import (
     MLAAttentionSpec,
     SinkFullAttentionSpec,
     SlidingWindowSpec,
+    OffloadMLAAttentionSpec,
 )
 from vllm.v1.request import Request
 
@@ -1095,6 +1097,152 @@ class SinkFullAttentionManager(FullAttentionManager):
         self.sink_blocks = self.block_pool.free_block_queue.popleft_n(num_sink_block)
 
 
+class OffloadMLAAttentionManager(FullAttentionManager):
+    """a"""
+    def __init__(self, kv_cache_spec: OffloadMLAAttentionSpec, **kwargs) -> None:
+        super().__init__(kv_cache_spec, **kwargs)
+        self.req_to_offloaded_blocks: defaultdict[str, list[KVCacheBlock]] = defaultdict(list)
+        self.req_to_num_allocated_tokens: defaultdict[str, int] = defaultdict(int)
+
+    def get_num_blocks_to_allocate(
+        self,
+        request_id: str,
+        num_tokens: int,
+        new_computed_blocks: Sequence[KVCacheBlock],
+        total_computed_tokens: int,
+        num_tokens_main_model: int,
+    ) -> int:
+        """
+        Get the number of blocks needed to be allocated for the request.
+
+        Args:
+            request_id: The request ID.
+            num_tokens: The total number of tokens that need a slot (including
+                tokens that are already allocated).
+            new_computed_blocks: The new computed blocks just hitting the
+                prefix caching.
+            total_computed_tokens: Include both local and external computed
+                tokens.
+            num_tokens_main_model: The number of tokens for the main model (aka target
+                model in spec decode). w/o spec decode, it is num_tokens;
+                with spec decode, it is num_tokens - num_lookahead_tokens.
+
+        Returns:
+            The number of blocks to allocate.
+        """
+
+        num_required_blocks = cdiv(num_tokens, self.block_size)
+        num_req_blocks = len(self.req_to_blocks.get(request_id, ()))
+        num_req_offloaded_blocks = len(self.req_to_offloaded_blocks.get(request_id, ()))
+
+        if request_id in self.num_cached_block:
+            # Fast-path: a running request won't have any new prefix-cache hits.
+            assert len(new_computed_blocks) == 0
+            # NOTE: With speculative decoding, request's blocks may be allocated
+            # for draft tokens which are later rejected. In this case,
+            # num_required_blocks may be smaller than num_req_blocks.
+            return max(num_required_blocks - num_req_blocks - num_req_offloaded_blocks, 0)
+
+        num_skipped_tokens = self.get_num_skipped_tokens(total_computed_tokens)
+        num_local_computed_blocks = len(new_computed_blocks) + num_req_blocks + num_req_offloaded_blocks
+        # Number of whole blocks that are skipped by the attention window.
+        # If nothing is skipped, this is 0.
+        num_skipped_blocks = num_skipped_tokens // self.block_size
+        # We need blocks for the non-skipped suffix. If there are still
+        # local-computed blocks inside the window, they contribute to the
+        # required capacity; otherwise, skipped blocks dominate.
+        num_new_blocks = max(
+            num_required_blocks - max(num_skipped_blocks, num_local_computed_blocks),
+            0,
+        )
+
+        # Among the `new_computed_blocks`, the first `num_skipped_blocks` worth
+        # of blocks are skipped; `num_req_blocks` of those may already be in
+        # `req_to_blocks`, so only skip the remainder from `new_computed_blocks`.
+        num_skipped_new_computed_blocks = max(0, num_skipped_blocks - num_req_blocks)
+
+        # If a computed block is an eviction candidate (in the free queue and
+        # ref_cnt == 0), it will be removed from the free queue when touched by
+        # the allocated request, so we must count it in the free-capacity check.
+        num_evictable_blocks = self._get_num_evictable_blocks(
+            new_computed_blocks[num_skipped_new_computed_blocks:]
+        )
+        return num_new_blocks + num_evictable_blocks
+
+    def allocate_new_blocks(
+        self, request_id: str, num_tokens: int, num_tokens_main_model: int
+    ) -> list[KVCacheBlock]:
+        """
+        Allocate new blocks for the request to give it at least `num_tokens`
+        token slots.
+
+        Args:
+            request_id: The request ID.
+            num_tokens: The total number of tokens that need a slot (including
+                tokens that are already allocated).
+            num_tokens_main_model: The number of tokens for the main model (aka target
+                model in spec decode). w/o spec decode, it is num_tokens;
+                with spec decode, it is num_tokens - num_lookahead_tokens.
+        Returns:
+            The new allocated blocks.
+        """
+
+        req_blocks = self.req_to_blocks[request_id] # TODO change to queue
+        req_freed_blocks = self.req_to_offloaded_blocks[request_id]
+        num_required_blocks = cdiv(num_tokens, self.block_size)
+
+        # free old full blocks (which should be already offloaded)
+        num_allocated_tokens = self.req_to_num_allocated_tokens[request_id]
+        num_new_tokens = num_tokens - num_allocated_tokens
+        if num_new_tokens > 1: # decode threshold in spec decode case
+            num_to_free_blocks = 0
+        else:
+            # only offload & free after (chunk) prefill is done
+            num_offloaded_blocks = max(num_allocated_tokens // self.block_size - 1, 0) # delay free one last full block, reserve for decode case
+            num_freed_blocks = len(req_freed_blocks)
+            num_to_free_blocks = num_offloaded_blocks - num_freed_blocks
+
+        # logger.info(f'>>>>> allocate new blocks, num_tokens = {num_tokens}, allocated_tokens={num_allocated_tokens}, req_blocks={len(req_blocks)}, req_offloaded_blocks = {len(req_freed_blocks)}, num_to_free_blocks = {num_to_free_blocks}')
+        to_free_blocks: list[KVCacheBlock] = []
+        for _ in range(num_to_free_blocks):
+            to_free_block = req_blocks.pop(0)
+            req_freed_blocks.append(to_free_block)
+            to_free_blocks.append(to_free_block)
+        if num_to_free_blocks > 0:
+            self.block_pool.free_blocks(to_free_blocks)
+            logger.info(f'>>>>> kv cache manager, req {request_id} free {len(to_free_blocks)} offloaded blocks: {[block.block_id for block in to_free_blocks]}')
+
+        # allocate new blocks
+        num_new_blocks = num_required_blocks - len(req_blocks) - len(req_freed_blocks)
+        self.req_to_num_allocated_tokens[request_id] = num_tokens
+        if num_new_blocks <= 0:
+            return []
+        else:
+            new_blocks = self.block_pool.get_new_blocks(num_new_blocks)
+            req_blocks.extend(new_blocks)
+            return new_blocks
+
+    @classmethod
+    def find_longest_cache_hit(
+        cls,
+        block_hashes: BlockHashList,
+        max_length: int,
+        kv_cache_group_ids: list[int],
+        block_pool: BlockPool,
+        kv_cache_spec: KVCacheSpec,
+        use_eagle: bool,
+        alignment_tokens: int,
+        dcp_world_size: int = 1,
+        pcp_world_size: int = 1,
+    ) -> tuple[list[KVCacheBlock], ...]:
+        computed_blocks: tuple[list[KVCacheBlock], ...] = tuple(
+            [] for _ in range(len(kv_cache_group_ids)))
+        return computed_blocks
+
+    def get_num_common_prefix_blocks(self, running_request_id: str) -> int:
+        return 0
+
+
 spec_manager_map: dict[type[KVCacheSpec], type[SingleTypeKVCacheManager]] = {
     FullAttentionSpec: FullAttentionManager,
     MLAAttentionSpec: FullAttentionManager,
@@ -1103,6 +1251,7 @@ spec_manager_map: dict[type[KVCacheSpec], type[SingleTypeKVCacheManager]] = {
     MambaSpec: MambaManager,
     CrossAttentionSpec: CrossAttentionManager,
     SinkFullAttentionSpec: SinkFullAttentionManager,
+    OffloadMLAAttentionSpec: OffloadMLAAttentionManager,
 }
 
 

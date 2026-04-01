@@ -628,6 +628,7 @@ def _check_enough_kv_cache_memory(
         )
 
     needed_memory = get_needed_memory()
+    logger.info(f'>>>>> needed_memory = {needed_memory}, available_memory = {available_memory}')
 
     if needed_memory > available_memory:
         estimated_max_len = estimate_max_model_len(available_memory)
@@ -1294,6 +1295,7 @@ def _report_kv_cache_config(
     )
 
     # Log the KV cache size and maximum concurrency.
+    logger.info(f'>>>>> report kv cache, num_blocks = {kv_cache_config.num_blocks}, len = {len(kv_cache_config.kv_cache_groups)}, min_block_size = {min_block_size}')
     num_tokens = (
         kv_cache_config.num_blocks
         // len(kv_cache_config.kv_cache_groups)
@@ -1354,8 +1356,12 @@ def _max_memory_usage_bytes_from_groups(
     page_size = get_uniform_page_size(
         [group.kv_cache_spec for group in kv_cache_groups]
     )
-    any_spec = kv_cache_groups[0].kv_cache_spec
-    blocks_needed = cdiv(any_spec.max_memory_usage_bytes(vllm_config), page_size)
+    # any_spec = kv_cache_groups[0].kv_cache_spec
+    # blocks_needed = cdiv(any_spec.max_memory_usage_bytes(vllm_config), page_size)
+    blocks_needed = sum([
+        cdiv(group.kv_cache_spec.max_memory_usage_bytes(vllm_config), page_size)
+        for group in kv_cache_groups
+    ])
 
     return group_size * page_size * blocks_needed
 
