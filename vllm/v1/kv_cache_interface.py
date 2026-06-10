@@ -620,6 +620,36 @@ class SinkFullAttentionSpec(FullAttentionSpec):
 
 
 @dataclass(frozen=True)
+class OffloadMLAAttentionSpec(AttentionSpec):
+    @property
+    def real_page_size_bytes(self) -> int:
+        return (
+            self.block_size
+            * self.num_kv_heads
+            * self.head_size
+            * get_dtype_size(self.dtype)
+        )
+    
+    def max_memory_usage_bytes(self, vllm_config: VllmConfig) -> int:
+        """
+        The maximum possible memory usage of this KV cache in bytes.
+
+        Returns:
+            The KV cache size in bytes
+        """
+        max_num_batched_tokens = vllm_config.scheduler_config.max_num_batched_tokens
+        max_model_len = vllm_config.model_config.max_model_len
+        # max gpu block number:
+        # max_num_batched_tokens / block_size in each step,
+        # and one extra unfull block from last step
+        # return (cdiv(max_num_batched_tokens, self.block_size) + 1) * self.page_size_bytes
+
+        # can only offload & free after prefill, so need max_model_len
+        # better to have a 'max_input_len' attr here
+        return cdiv(max_model_len, self.block_size) * self.page_size_bytes
+
+
+@dataclass(frozen=True)
 class UniformTypeKVCacheSpecs(KVCacheSpec):
     """
     A KV cache spec for multiple layers with the same type of attention. Here,
@@ -686,6 +716,10 @@ class UniformTypeKVCacheSpecs(KVCacheSpec):
                 isinstance(spec, MambaSpec)
                 and spec.num_speculative_blocks == one_spec.num_speculative_blocks
                 for spec in kv_cache_specs.values()
+            )
+        elif isinstance(one_spec, OffloadMLAAttentionSpec):
+            return all(
+                isinstance(spec, OffloadMLAAttentionSpec) for spec in kv_cache_specs.values()
             )
         else:
             # NOTE(Chen): Please add new branches for new KV cache spec types.
